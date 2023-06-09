@@ -1,0 +1,6 @@
+gymnasium[box2d]>=0.28.1
+numpy>=1.21.0
+tensorflow>=2.12.0
+box2d-py>=2.3.2
+tflearn>=0.5.0
+alive_progress>=3.1.4
