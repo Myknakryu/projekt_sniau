@@ -1,8 +1,8 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from keras.optimizers import Adam
-from keras.models import load_model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import load_model
 import gymnasium as gym
 
 class ReplayBuffer():
@@ -39,10 +39,12 @@ class ReplayBuffer():
 
         return states, actions, rewards, states_, terminal
     
-def build_dqn(lr, n_actions, input_dims, fc1_dims, fc2_dims):
+def build_dqn(lr, n_actions, input_dims, fc1_dims, fc2_dims, fc3_dims, fc4_dims):
     model = keras.Sequential([
-        keras.layers.Dense(fc1_dims, activation='relu'),
+        keras.layers.Dense(fc1_dims, activation='relu', input_shape=input_dims),
         keras.layers.Dense(fc2_dims, activation='relu'),
+        keras.layers.Dense(fc3_dims, activation='relu'),
+        keras.layers.Dense(fc4_dims, activation='relu'),
         keras.layers.Dense(n_actions, activation=None)])
     model.compile(optimizer=Adam(learning_rate=lr), loss='mean_squared_error')
 
@@ -60,7 +62,7 @@ class Agent():
         self.batch_size = batch_size
         self.model_file = fname
         self.memory = ReplayBuffer(mem_size, input_dims)
-        self.q_eval = build_dqn(lr, n_actions, input_dims, 256, 256)
+        self.q_eval = build_dqn(lr, n_actions, input_dims, 256, 512, 128, 128)
 
     def store_transition(self, state, action, reward, new_state, done):
         self.memory.store_transition(state, action, reward, new_state, done)
@@ -107,15 +109,19 @@ class Agent():
         self.q_eval = load_model(self.model_file)
 
 if __name__ == '__main__':
-    env = gym.make('LunarLander-v2', render_mode = 'human')
-    lr = 0.001
+    env = gym.make('LunarLander-v2', render_mode = None)
+    lr = 0.01
     n = 500
-    agent = Agent(gamma=0.99, epsilon=1.0, lr=lr, 
+    agent = Agent(gamma=0.97, epsilon=1.2, lr=lr, 
                   input_dims=env.observation_space.shape, 
                   n_actions=env.action_space.n, batch_size=512*n,
                   mem_size=1000000, epsilon_end=0.01)
     scores = []
     eps_history = []
+    try:
+        agent.load_model()
+    except IOError:
+        pass
     for i in range(n):
         first = True
         done = False
@@ -136,5 +142,7 @@ if __name__ == '__main__':
         eps_history.append(agent.epsilon)
         scores.append(score)
         print('Current score: ', score)
+    
+    agent.save_model()
 
         
