@@ -1,148 +1,142 @@
+import gymnasium as gym
 import numpy as np
+
+# Tensorflow annoyance with AMDGPU since ROCm support is unstable as HELL
+import logging, os
+logging.disable(logging.WARNING)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.models import load_model
-import gymnasium as gym
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.optimizers import Adam, RMSprop
+from tensorflow.keras import backend as K
 
-class ReplayBuffer():
-    def __init__(self, max_size, input_dims):
-        self.mem_size = max_size
-        self.mem_cntr = 0
+from threading import Thread, Lock
+from multiprocessing import Process, Pipe
+import time
 
-        self.state_memory = np.zeros((self.mem_size, *input_dims), 
-                                    dtype=np.float32)
-        self.new_state_memory = np.zeros((self.mem_size, *input_dims),
-                                dtype=np.float32)
-        self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
-        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
-        self.terminal_memory = np.zeros(self.mem_size, dtype=np.int32)
-
-    def store_transition(self, state, action, reward, state_, done):
-        index = self.mem_cntr % self.mem_size
-        self.reward_memory[index] = reward
-        self.terminal_memory[index] = 1 - int(done)
-        self.action_memory[index] = action
-        self.new_state_memory[index] = state_
-        self.state_memory[index] = state
-        self.mem_cntr += 1
-
-    def sample_buffer(self, batch_size):
-        max_mem = min(self.mem_cntr, self.mem_size)
-        batch = np.random.choice(max_mem, batch_size, replace=False)
-
-        states = self.state_memory[batch]
-        states_ = self.new_state_memory[batch]
-        rewards = self.reward_memory[batch]
-        actions = self.action_memory[batch]
-        terminal = self.terminal_memory[batch]
-
-        return states, actions, rewards, states_, terminal
-    
-def build_dqn(lr, n_actions, input_dims, fc1_dims, fc2_dims, fc3_dims, fc4_dims):
-    model = keras.Sequential([
-        keras.layers.Dense(fc1_dims, activation='relu', input_shape=input_dims),
-        keras.layers.Dense(fc2_dims, activation='relu'),
-        keras.layers.Dense(fc3_dims, activation='relu'),
-        keras.layers.Dense(fc4_dims, activation='relu'),
-        keras.layers.Dense(n_actions, activation=None)])
-    model.compile(optimizer=Adam(learning_rate=lr), loss='mean_squared_error')
-
-    return model
-
-class Agent():
-    def __init__(self, lr, gamma, n_actions, epsilon, batch_size,
-                input_dims, epsilon_dec=1e-3, epsilon_end=0.01,
-                mem_size=1000000, fname='dqn_model.h5'):
-        self.action_space = [i for i in range(n_actions)]
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.eps_dec = epsilon_dec
-        self.eps_min = epsilon_end
-        self.batch_size = batch_size
-        self.model_file = fname
-        self.memory = ReplayBuffer(mem_size, input_dims)
-        self.q_eval = build_dqn(lr, n_actions, input_dims, 256, 512, 128, 128)
-
-    def store_transition(self, state, action, reward, new_state, done):
-        self.memory.store_transition(state, action, reward, new_state, done)
-
-    def choose_action(self, observation):
-        if np.random.random() < self.epsilon:
-            action = np.random.choice(self.action_space)
-        else:
-            state = np.array([observation])
-            actions = self.q_eval.predict(state)
-
-            action = np.argmax(actions)
-
-        return action
-
-    def learn(self):
-        if self.memory.mem_cntr < self.batch_size:
-            return
-
-        states, actions, rewards, states_, dones = \
-                self.memory.sample_buffer(self.batch_size)
-
-        q_eval = self.q_eval.predict(states)
-        q_next = self.q_eval.predict(states_)
+env = gym.make("LunarLander-v2", render_mode = 'human')
 
 
-        q_target = np.copy(q_eval)
-        batch_index = np.arange(self.batch_size, dtype=np.int32)
+# PPO Actor
 
-        q_target[batch_index, actions] = rewards + \
-                        self.gamma * np.max(q_next, axis=1)*dones
+class Actor:
+    def __init__(self, action_space, observation_space_shape) -> None:
+        self.action_space = action_space
+        self.model = keras.Sequential([
+            keras.layers.Dense(512, activation='relu', input_shape=observation_space_shape, 
+                            kernel_initializer=tf.random_normal_initializer(stddev=0.01)),
+            keras.layers.Dense(256, activation='relu', kernel_initializer=tf.random_normal_initializer(stddev=0.01)),
+            keras.layers.Dense(64, activation='relu', kernel_initializer=tf.random_normal_initializer(stddev=0.01)),
+            keras.layers.Dense(self.action_space, activation='softmax')
+        ])
+        self.model.compile(optimizer=Adam(learning_rate=0.00025), loss=self.ppo_loss)
 
 
-        self.q_eval.train_on_batch(states, q_target)
-
-        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > \
-                self.eps_min else self.eps_min
-
-    def save_model(self):
-        self.q_eval.save(self.model_file)
-
-
-    def load_model(self):
-        self.q_eval = load_model(self.model_file)
-
-if __name__ == '__main__':
-    env = gym.make('LunarLander-v2', render_mode = None)
-    lr = 0.01
-    n = 500
-    agent = Agent(gamma=0.97, epsilon=1.2, lr=lr, 
-                  input_dims=env.observation_space.shape, 
-                  n_actions=env.action_space.n, batch_size=512*n,
-                  mem_size=1000000, epsilon_end=0.01)
-    scores = []
-    eps_history = []
-    try:
-        agent.load_model()
-    except IOError:
-        pass
-    for i in range(n):
-        first = True
-        done = False
-        score = 0
-        observation = env.reset()
-        while not done:
-            observation = np.asarray(observation)
-            action = agent.choose_action(observation)
-            observation_, reward, done, _, info = env.step(action)
-            observation_ = np.asarray(observation_)
-            if first:
-                observation = observation_
-                first = False
-            score+=reward
-            agent.store_transition(observation, action, reward, observation_, done)
-            observation = observation_
-            agent.learn()
-        eps_history.append(agent.epsilon)
-        scores.append(score)
-        print('Current score: ', score)
-    
-    agent.save_model()
-
+    def ppo_loss(self, y_true, y_pred):
+        # https://arxiv.org/pdf/1707.06347.pdf
+        advantages, prediction_picks, actions = y_true[:, :1], y_true[:, 1:1+self.action_space], y_true[:, 1+self.action_space:]
+        LOSS_CLIPPING = 0.2
+        ENTROPY_LOSS = 0.01
         
+        prob = actions * y_pred
+        old_prob = actions * prediction_picks
+
+        prob = K.clip(prob, 1e-10, 1.0)
+        old_prob = K.clip(old_prob, 1e-10, 1.0)
+
+        ratio = K.exp(K.log(prob) - K.log(old_prob))
+        
+        p1 = ratio * advantages
+        p2 = K.clip(ratio, min_value=1 - LOSS_CLIPPING, max_value=1 + LOSS_CLIPPING) * advantages
+
+        actor_loss = -K.mean(K.minimum(p1, p2))
+
+        entropy = -(y_pred * K.log(y_pred + 1e-10))
+        entropy = ENTROPY_LOSS * K.mean(entropy)
+        
+        total_loss = actor_loss - entropy
+
+        return total_loss
+
+    def predict(self, state):
+        return self.model.predict(state)
+    
+# PPO critic
+class Critic:
+    def __init__(self, action_space, observation_space_shape) -> None:
+        X_input = Input(observation_space_shape)
+        old_values = Input(shape=(1,))
+        self.model = keras.Sequential([
+            keras.layers.Dense(512, activation='relu', kernel_initializer='he_uniform', input_shape=(observation_space_shape + old_values.shape)),
+            keras.layers.Dense(256, activation='relu', kernel_initializer='he_uniform'),
+            keras.layers.Dense(64, activation='relu', kernel_initializer='he_uniform'),
+            keras.layers.Dense(1, activation=None),
+        ])
+
+    def critic_PPO2_loss(self, values):
+        def loss(y_true, y_pred):
+            LOSS_CLIPPING = 0.2
+            clipped_value_loss = values + K.clip(y_pred - values, -LOSS_CLIPPING, LOSS_CLIPPING)
+            v_loss1 = (y_true - clipped_value_loss) ** 2
+            v_loss2 = (y_true - y_pred) ** 2
+            
+            value_loss = 0.5 * K.mean(K.maximum(v_loss1, v_loss2))
+            return value_loss
+        return loss
+
+    def predict(self, state):
+        return self.model.predict([state, np.zeros((state.shape[0], 1))])
+
+actor_instance = Actor(env.action_space.n, env.observation_space.shape)
+critic_instance = Critic(env.action_space.n, env.observation_space.shape)
+
+state, _ = env.reset()
+
+state_size = env.observation_space.shape
+action_size = env.action_space.n
+
+TOTAL_EPISODES = 1000
+episode = 0
+epochs = 10
+shuffle = False
+replay_count = 0
+
+print(state)
+print(state.shape)
+state = np.reshape(state, [1, state_size[0]])
+
+done = False
+score = 0
+while True:
+    states = []
+    next_states = []
+    actions = []
+    rewards = []
+    predictions = []
+    dones = []
+    while not done:
+        env.render()
+        prediction = actor_instance.predict(state)[0]
+        action = np.random.choice(action_size)
+        action_oneshot = np.zeros([action_size])
+        action_oneshot[action] = 1
+        next_state, reward, done, _, _ = env.step(action)
+        states.append(state)
+        next_states.append(np.reshape(next_state, [1, state_size[0]]))
+        actions.append(action_oneshot)
+        dones.append(done)
+        predictions.append(prediction)
+        state = np.reshape(next_state, [1, state_size[0]])
+        score += reward
+        if done:
+            episode += 1
+            print("score {}".format(score))
+            state, _ = env.reset()
+            done, score = False, 0
+            state = np.reshape(state, [1, state_size[0]])
+    if episode >= TOTAL_EPISODES:
+        break
+env.close()
