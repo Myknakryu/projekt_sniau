@@ -3,6 +3,10 @@ import numpy as np
 import random
 from Actor import Actor
 from Critic import Critic
+from threading import Thread, Lock
+from multiprocessing import Process, Pipe
+from ThreadedEnvironment import ThreadedEnvironment
+import time
 import copy
 
 class SimulationAgent:
@@ -15,6 +19,7 @@ class SimulationAgent:
         self.epochs = 10
         self.episode = 0
         self.max_episodes = 1000
+        self.batch = 1000
         self.replay_count = 0
         self.scores = []
         self.Actor = Actor(action_space= self.action_size,
@@ -96,3 +101,70 @@ class SimulationAgent:
             if self.episode >= self.max_episodes:
                 break
         self.env.close()
+
+    def run_parallelized(self, threads):
+        works, parent_connections, child_connections = [], [], []
+        for idx in range(threads):
+            parent_connection, child_connection = Pipe()
+            work = ThreadedEnvironment(idx, child_connection, self.observation_size, self.action_size, True)
+            work.start()
+            works.append(work)
+            parent_connections.append(parent_connection)
+            child_connections.append(child_connection)
+
+        states = [[] for _ in range(threads)]
+        next_states = [[] for _ in range(threads)]
+        actions = [[] for _ in range(threads)]
+        rewards = [[] for _ in range(threads)]
+        dones = [[] for _ in range(threads)]
+        predictions = [[] for _ in range(threads)]
+        score = [0 for _ in range(threads)]
+
+        state = [0 for _ in range(threads)]
+        for worker_id, parent_conn in enumerate(parent_connections):
+            state[worker_id] = parent_conn.recv()
+
+        while self.episode < self.max_episodes:
+            predictions_list = self.Actor.predict(np.reshape(state, [threads, self.observation_size[0]]))
+            actions_list = [np.random.choice(self.action_size, p=i) for i in predictions_list]
+
+            for worker_id, parent_conn in enumerate(parent_connections):
+                parent_conn.send(actions_list[worker_id])
+                action_onehot = np.zeros([self.action_size])
+                action_onehot[actions_list[worker_id]] = 1
+                actions[worker_id].append(action_onehot)
+                predictions[worker_id].append(predictions_list[worker_id])
+
+            for worker_id, parent_conn in enumerate(parent_connections):
+                next_state, reward, done, _ = parent_conn.recv()
+
+                states[worker_id].append(state[worker_id])
+                next_states[worker_id].append(next_state)
+                rewards[worker_id].append(reward)
+                dones[worker_id].append(done)
+                state[worker_id] = next_state
+                score[worker_id] += reward
+
+                if done:
+                    self.scores.append(score[worker_id])
+                    print("Episode: {} of {}, Current score: {}, Avg. Score: {}".format(
+                        self.episode, self.max_episodes, score[worker_id], np.mean(self.scores[-50:])))
+                    score[worker_id] = 0
+                    if(self.episode < self.max_episodes):
+                        self.episode += 1
+                        
+            for worker_id in range(threads):
+                if len(states[worker_id]) >= self.batch:
+                    self.replay(states[worker_id], actions[worker_id], rewards[worker_id], predictions[worker_id], dones[worker_id], next_states[worker_id])
+                    states[worker_id] = []
+                    next_states[worker_id] = []
+                    actions[worker_id] = []
+                    rewards[worker_id] = []
+                    dones[worker_id] = []
+                    predictions[worker_id] = []
+
+        works.append(work)
+        for work in works:
+            work.terminate()
+            print('TERMINATED:', work)
+            work.join()
