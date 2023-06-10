@@ -1,138 +1,140 @@
-import gymnasium as gym
-import random
 import numpy as np
-import tflearn
-from gymnasium.utils import play
-from alive_progress import alive_bar
-from tflearn.layers.core import input_data, dropout, fully_connected
-from tflearn.layers.estimator import regression
-from statistics import median, mean
-from collections import Counter
+import tensorflow as tf
+from tensorflow import keras
+from keras.optimizers import Adam
+from keras.models import load_model
+import gymnasium as gym
 
-LR = 1e-3
-env = gym.make("LunarLander-v2", render_mode = None)
+class ReplayBuffer():
+    def __init__(self, max_size, input_dims):
+        self.mem_size = max_size
+        self.mem_cntr = 0
 
-env.reset()
-goal_steps = 500
-score_requirement = 100
-initial_games = 10000
+        self.state_memory = np.zeros((self.mem_size, *input_dims), 
+                                    dtype=np.float32)
+        self.new_state_memory = np.zeros((self.mem_size, *input_dims),
+                                dtype=np.float32)
+        self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
+        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
+        self.terminal_memory = np.zeros(self.mem_size, dtype=np.int32)
 
-print("-- Observations",env.observation_space)
-print("-- actionspace",env.action_space)
+    def store_transition(self, state, action, reward, state_, done):
+        index = self.mem_cntr % self.mem_size
+        self.reward_memory[index] = reward
+        self.terminal_memory[index] = 1 - int(done)
+        self.action_memory[index] = action
+        self.new_state_memory[index] = state_
+        self.state_memory[index] = state
+        self.mem_cntr += 1
 
-def initial_population():
-    training_data = []
-    scores = []
-    accepted_scores = []
-    with alive_bar(initial_games) as bar:
-        for _ in range (initial_games):
-            score = 0
-            game_memory = []
-            prev_observation = []
-            for _ in range(goal_steps):
-                action = env.action_space.sample()
-                observation, reward, done, truncated, info = env.step(action)
+    def sample_buffer(self, batch_size):
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch = np.random.choice(max_mem, batch_size, replace=False)
 
-                if len(prev_observation) > 0:
-                    game_memory.append([prev_observation, action])
+        states = self.state_memory[batch]
+        states_ = self.new_state_memory[batch]
+        rewards = self.reward_memory[batch]
+        actions = self.action_memory[batch]
+        terminal = self.terminal_memory[batch]
 
-                prev_observation = observation
-                score += reward
-                if done:
-                    break
-            
-            if score >= score_requirement:
-                accepted_scores.append(score)
-                for data in game_memory:
-                    match data[1]:
-                        case 0:
-                            output = [1,0,0,0]
-                        case 1:
-                            output = [0,1,0,0]
-                        case 2:
-                            output = [0,0,1,0]
-                        case 3:
-                            output = [0,0,0,1]
-
-                    training_data.append([data[0], output])
-
-            env.reset()
-            scores.append(score)
-            bar()
-    print("avg score accepted: ", mean(accepted_scores))
-    print('median: ', median(accepted_scores))
-    print('count: ', Counter(accepted_scores))
-    return training_data
-
-
-try:
-    training_data = np.load('initial.npy', allow_pickle=True)
-except IOError:
-    training_data = initial_population()
-    save_data = np.array(training_data)
-    np.save('initial.npy', save_data)
-
-def neural_network_model():
-    network = input_data(shape=[None, env.observation_space.shape[0]], name='input')
-
-    network = fully_connected(network, 128, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 256, activation='relu')
-    network = dropout(network, 0.8)
+        return states, actions, rewards, states_, terminal
     
-    network = fully_connected(network, 512, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 256, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, 128, activation='relu')
-    network = dropout(network, 0.8)
-
-    network = fully_connected(network, env.action_space.n, activation='softmax')
-    network = regression(network, optimizer='adam', loss = 'categorical_crossentropy', name = 'targets')
-    
-    model = tflearn.DNN(network)
+def build_dqn(lr, n_actions, input_dims, fc1_dims, fc2_dims):
+    model = keras.Sequential([
+        keras.layers.Dense(fc1_dims, activation='relu'),
+        keras.layers.Dense(fc2_dims, activation='relu'),
+        keras.layers.Dense(n_actions, activation=None)])
+    model.compile(optimizer=Adam(learning_rate=lr), loss='mean_squared_error')
 
     return model
 
-def train_model(training_data, model=False):
-    x = np.array([i[0] for i in training_data]).reshape(-1, len(training_data[0][0]))
-    y = [i[1] for i in training_data]
+class Agent():
+    def __init__(self, lr, gamma, n_actions, epsilon, batch_size,
+                input_dims, epsilon_dec=1e-3, epsilon_end=0.01,
+                mem_size=1000000, fname='dqn_model.h5'):
+        self.action_space = [i for i in range(n_actions)]
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.eps_dec = epsilon_dec
+        self.eps_min = epsilon_end
+        self.batch_size = batch_size
+        self.model_file = fname
+        self.memory = ReplayBuffer(mem_size, input_dims)
+        self.q_eval = build_dqn(lr, n_actions, input_dims, 256, 256)
 
-    if not model:
-        model = neural_network_model()
+    def store_transition(self, state, action, reward, new_state, done):
+        self.memory.store_transition(state, action, reward, new_state, done)
 
-    model.fit({'input':x}, {'targets':y}, n_epoch=10, snapshot_step=5000, show_metric=True, run_id='tak')
-    
-    return model
-
-model = train_model(training_data)
-
-
-scores = []
-choices = []
-env = gym.make("LunarLander-v2", render_mode = 'human')
-for each_game in range(10):
-    score = 0;
-    game_memory = []
-    prev_obs = []
-    env.reset()
-    for _ in range(goal_steps):
-        env.render()
-        if len(prev_obs) == 0:
-            action = random.randrange(0,4)
+    def choose_action(self, observation):
+        if np.random.random() < self.epsilon:
+            action = np.random.choice(self.action_space)
         else:
-            action = np.argmax(model.predict(prev_obs.reshape(-1, len(prev_obs)))[0])
+            state = np.array([observation])
+            actions = self.q_eval.predict(state)
 
-        choices.append(action)
-        new_observation, reward, done, truncated, info = env.step(action)
-        prev_obs = new_observation
-        game_memory.append([new_observation, action])
-        score += reward;
-        if done:
-            break
-    scores.append(score)
+            action = np.argmax(actions)
 
-print('Average: ', mean(scores))
+        return action
+
+    def learn(self):
+        if self.memory.mem_cntr < self.batch_size:
+            return
+
+        states, actions, rewards, states_, dones = \
+                self.memory.sample_buffer(self.batch_size)
+
+        q_eval = self.q_eval.predict(states)
+        q_next = self.q_eval.predict(states_)
+
+
+        q_target = np.copy(q_eval)
+        batch_index = np.arange(self.batch_size, dtype=np.int32)
+
+        q_target[batch_index, actions] = rewards + \
+                        self.gamma * np.max(q_next, axis=1)*dones
+
+
+        self.q_eval.train_on_batch(states, q_target)
+
+        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > \
+                self.eps_min else self.eps_min
+
+    def save_model(self):
+        self.q_eval.save(self.model_file)
+
+
+    def load_model(self):
+        self.q_eval = load_model(self.model_file)
+
+if __name__ == '__main__':
+    env = gym.make('LunarLander-v2', render_mode = 'human')
+    lr = 0.001
+    n = 500
+    agent = Agent(gamma=0.99, epsilon=1.0, lr=lr, 
+                  input_dims=env.observation_space.shape, 
+                  n_actions=env.action_space.n, batch_size=512*n,
+                  mem_size=1000000, epsilon_end=0.01)
+    scores = []
+    eps_history = []
+    for i in range(n):
+        first = True
+        done = False
+        score = 0
+        observation = env.reset()
+        while not done:
+            observation = np.asarray(observation)
+            action = agent.choose_action(observation)
+            observation_, reward, done, _, info = env.step(action)
+            observation_ = np.asarray(observation_)
+            if first:
+                observation = observation_
+                first = False
+            score+=reward
+            agent.store_transition(observation, action, reward, observation_, done)
+            observation = observation_
+            agent.learn()
+        eps_history.append(agent.epsilon)
+        scores.append(score)
+        print('Current score: ', score)
+
+        
