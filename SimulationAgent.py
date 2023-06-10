@@ -60,7 +60,7 @@ class SimulationAgent:
         y_true = np.hstack([advantages, predictions, actions])
         
         a_loss = self.Actor.model.fit(states, y_true, epochs=self.epochs, verbose=0, shuffle=False)
-        c_loss = self.Critic.model.fit(states, y=values, epochs=self.epochs, verbose=0, shuffle=False)
+        c_loss = self.Critic.model.fit([states, values], target, epochs=self.epochs, verbose=0, shuffle=False)
 
 
         self.replay_count += 1
