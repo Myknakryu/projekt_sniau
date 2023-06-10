@@ -17,11 +17,10 @@ class SimulationAgent:
         self.env._max_episode_steps = 1000
         self.action_size = self.env.action_space.n
         self.observation_size = self.env.observation_space.shape
-        self.max_avg = 50
         self.epochs = 10
         self.episode = 0
-        self.max_episodes = 1000
-        self.batch = 1000
+        self.max_episodes = 2000
+        self.batch = 2000
         self.replay_count = 0
         self.scores = []
         self.mean_vals = []
@@ -41,6 +40,8 @@ class SimulationAgent:
             plt.legend()
             plt.xlabel("Epizod")
             plt.ylabel("Wartość nagrody")
+            plt.xlim([0, self.episode])
+            plt.grid()
             plt.draw()
             plt.pause(0.01)
 
@@ -189,4 +190,5 @@ class SimulationAgent:
         for work in works:
             work.terminate()
             work.join()
-    
+        
+        self.redraw(1)
