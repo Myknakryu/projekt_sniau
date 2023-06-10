@@ -1,11 +1,13 @@
 import gymnasium as gym
 import numpy as np
+from matplotlib import pyplot as plt
 import random
 from Actor import Actor
 from Critic import Critic
 from threading import Thread, Lock
 from multiprocessing import Process, Pipe
 from ThreadedEnvironment import ThreadedEnvironment
+from matplotlib.animation import FuncAnimation
 import time
 import copy
 
@@ -22,10 +24,25 @@ class SimulationAgent:
         self.batch = 1000
         self.replay_count = 0
         self.scores = []
+        self.mean_vals = []
+        self.episodes = []
+        plt.plot()
+        plt.ion()
+        plt.show()
+
         self.Actor = Actor(action_space= self.action_size,
                             observation_space_shape = self.observation_size)
         self.Critic = Critic(action_space = self.action_size, 
                              observation_space_shape = self.observation_size)
+    def redraw(self, i):
+            plt.cla()
+            plt.plot(self.episodes, self.scores, label='Uzyskana nagroda')
+            plt.plot(self.episodes, self.mean_vals, label='Średnia z 50 epizodów')
+            plt.legend()
+            plt.xlabel("Epizod")
+            plt.ylabel("Wartość nagrody")
+            plt.draw()
+            plt.pause(0.01)
 
     def new_action(self, state):
         reshaped_state = np.reshape(state, [1, self.observation_size[0]])
@@ -146,10 +163,15 @@ class SimulationAgent:
                 score[worker_id] += reward
 
                 if done:
+                    self.episodes.append(self.episode)
                     self.scores.append(score[worker_id])
+                    mean_val = np.mean(self.scores[-50:])
+                    self.mean_vals.append(mean_val)
                     print("Episode: {} of {}, Current score: {}, Avg. Score: {}".format(
-                        self.episode, self.max_episodes, score[worker_id], np.mean(self.scores[-50:])))
+                        self.episode, self.max_episodes, score[worker_id], mean_val))
                     score[worker_id] = 0
+                    if(self.episode % 10 == 0):
+                        self.redraw(1)
                     if(self.episode < self.max_episodes):
                         self.episode += 1
                         
@@ -166,5 +188,5 @@ class SimulationAgent:
         works.append(work)
         for work in works:
             work.terminate()
-            print('TERMINATED:', work)
             work.join()
+    
