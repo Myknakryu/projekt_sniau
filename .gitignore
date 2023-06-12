@@ -154,3 +154,7 @@ cython_debug/
 
 # Generated logs
 log/
+
+# Other files
+*.h5
+*.npy

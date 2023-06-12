@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+import matplotlib
 from matplotlib import pyplot as plt
 import random
 from Actor import Actor
@@ -19,12 +20,12 @@ class SimulationAgent:
         self.observation_size = self.env.observation_space.shape
         self.epochs = 10
         self.episode = 0
-        self.max_episodes = 2000
-        self.batch = 2000
+        self.max_episodes = 100
         self.replay_count = 0
         self.scores = []
         self.mean_vals = []
         self.episodes = []
+        matplotlib.use('Qt5Agg')
         plt.plot()
         plt.ion()
         plt.show()
@@ -33,7 +34,7 @@ class SimulationAgent:
                             observation_space_shape = self.observation_size)
         self.Critic = Critic(action_space = self.action_size, 
                              observation_space_shape = self.observation_size)
-    def redraw(self, i):
+    def redraw(self):
             plt.cla()
             plt.plot(self.episodes, self.scores, label='Uzyskana nagroda')
             plt.plot(self.episodes, self.mean_vals, label='Średnia z 50 epizodów')
@@ -107,11 +108,14 @@ class SimulationAgent:
                 state = np.reshape(next_state, [1, self.observation_size[0]])
                 score += reward
                 if done:
+                    self.episodes.append(self.episode)
                     self.episode += 1
                     self.replay(states, actions, rewards, predictions, dones, next_states)
                     self.scores.append(score)
                     print("Episode: {} of {}, Current score: {}, Avg. Score: {}".format(
                         self.episode, self.max_episodes, score, np.mean(self.scores)))
+                    self.mean_vals(np.mean(self.scores[-50:]))
+                    self.redraw()
                     state, _ = self.env.reset()
                     done, score = False, 0
                     state = np.reshape(state, [1, self.observation_size[0]])
@@ -171,13 +175,12 @@ class SimulationAgent:
                     print("Episode: {} of {}, Current score: {}, Avg. Score: {}".format(
                         self.episode, self.max_episodes, score[worker_id], mean_val))
                     score[worker_id] = 0
-                    if(self.episode % 10 == 0):
-                        self.redraw(1)
+                    self.redraw()
                     if(self.episode < self.max_episodes):
                         self.episode += 1
                         
             for worker_id in range(threads):
-                if len(states[worker_id]) >= self.batch:
+                if len(states[worker_id]) >= self.max_episodes:
                     self.replay(states[worker_id], actions[worker_id], rewards[worker_id], predictions[worker_id], dones[worker_id], next_states[worker_id])
                     states[worker_id] = []
                     next_states[worker_id] = []
@@ -191,4 +194,12 @@ class SimulationAgent:
             work.terminate()
             work.join()
         
-        self.redraw(1)
+        self.redraw()
+
+    def load(self, actor_file, critic_file ):
+        self.Actor.model.load_weights(actor_file)
+        self.Critic.model.load_weights(critic_file)
+
+    def save(self, actor_file, critic_file):
+        self.Actor.model.save_weights(actor_file)
+        self.Critic.model.save_weights(critic_file)
