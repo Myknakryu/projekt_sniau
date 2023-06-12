@@ -203,3 +203,21 @@ class SimulationAgent:
     def save(self, actor_file, critic_file):
         self.Actor.model.save_weights(actor_file)
         self.Critic.model.save_weights(critic_file)
+
+
+    def play(self):
+        self.env = gym.make('LunarLander-v2', render_mode= 'human')
+        for _ in range(self.max_episodes):
+            state, _ = self.env.reset()
+            state = np.reshape(state,[1,self.observation_size[0]])
+            done = False
+            score = 0
+            while not done:
+                self.env.render()
+                action = np.argmax(self.Actor.predict(state)[0])
+                state, reward, done, truncated, _ = self.env.step(action)
+                state = np.reshape(state, [1, self.observation_size[0]])
+                score += reward
+                if done or truncated:
+                    break
+        self.env.close()

@@ -33,4 +33,13 @@ if __name__ == "__main__":
             simulation.save(actor_file=actor_name, critic_file=critic_name)
         plt.ioff()
         plt.show()
-        
+    else:
+        base_name = get_input_string("Podaj nazwę wczytywanego modelu: ")
+        if base_name == None:
+            base_name = "latest"
+        actor_name = base_name + "_actor.h5"
+        critic_name = base_name + "_critic.h5"
+        simulation = SimulationAgent()
+        simulation.load(actor_file=actor_name, critic_file=critic_name)
+        simulation.play()
+
