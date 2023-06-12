@@ -22,7 +22,7 @@ if __name__ == "__main__":
     atexit.register(clean_up)
     if show_yes_no_dialog("Czy chcesz trenować nowy model?"):
         tf.compat.v1.disable_eager_execution()
-        simulation = SimulationAgent()
+        simulation = SimulationAgent(max_steps=2000, epochs=10, max_episodes=1000)
         simulation.run_parallelized(12)
         if show_yes_no_dialog("Czy chcesz zapisać model?"):
             base_name = get_input_string("Podaj nazwę: ")
@@ -39,7 +39,7 @@ if __name__ == "__main__":
             base_name = "latest"
         actor_name = base_name + "_actor.h5"
         critic_name = base_name + "_critic.h5"
-        simulation = SimulationAgent()
+        simulation = SimulationAgent(max_steps=1000, epochs=10, max_episodes=10, plotting=False)
         simulation.load(actor_file=actor_name, critic_file=critic_name)
         simulation.play()
 

@@ -13,22 +13,24 @@ import time
 import copy
 
 class SimulationAgent:
-    def __init__(self):
+    def __init__(self,max_steps, epochs, max_episodes, plotting = True):
         self.env = gym.make('LunarLander-v2')
-        self.env._max_episode_steps = 1000
+        self.max_episode_steps = max_steps
+        self.env._max_episode_steps = self.max_episode_steps
         self.action_size = self.env.action_space.n
         self.observation_size = self.env.observation_space.shape
-        self.epochs = 10
+        self.epochs = epochs
         self.episode = 0
-        self.max_episodes = 100
+        self.max_episodes = max_episodes
         self.replay_count = 0
         self.scores = []
         self.mean_vals = []
         self.episodes = []
-        matplotlib.use('Qt5Agg')
-        plt.plot()
-        plt.ion()
-        plt.show()
+        if plotting:
+            matplotlib.use('Qt5Agg')
+            plt.plot()
+            plt.ion()
+            plt.show()
 
         self.Actor = Actor(action_space= self.action_size,
                             observation_space_shape = self.observation_size)
@@ -207,6 +209,7 @@ class SimulationAgent:
 
     def play(self):
         self.env = gym.make('LunarLander-v2', render_mode= 'human')
+        self.env._max_episode_steps = self.max_episode_steps
         for _ in range(self.max_episodes):
             state, _ = self.env.reset()
             state = np.reshape(state,[1,self.observation_size[0]])
